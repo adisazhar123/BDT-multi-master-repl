@@ -4,7 +4,8 @@ Muhammad Adistya Azhar
 
 ----------------------
 # Implementasi Multi Master Group Replica
-1. Desain dan implementasi infrastruktur
+
+**Soal 1**: Desain dan implementasi infrastruktur
 Arsitektur terdiri dari 3 database server, 1 database load balancer, 1 web server, dan 1 reverse proxy. Kotak merah menandakan berada dalam 1 vagrant machine.
 
 ![Desain infrastruktur](media/desain_infrastruktur.png )
@@ -152,3 +153,210 @@ Database yang digunakan adalah MySQL dengan plugin MySQL Group replication. Beri
   ```
 
 b. Proses instalasi *database load balancer* ProxySQL
+  1. Download file dan install `.deb` ProxySQL
+  ```
+  curl -OL https://github.com/sysown/proxysql/releases/download/v1.4.4/proxysql_1.4.4-ubuntu16_amd64.deb
+  sudo dpkg -i proxysql_*
+  ```
+  2. Start ProxySQL
+  ```
+  sudo systemctl start proxysql
+  ```
+  3. Konfigurasi monitoring MySQL member. Kita harus download `.sql` file yang berisi fungsi agar ProxySQL grou replication dapat berjalan. (Masuk ke salah 1 member MySQL)
+  ```
+    (192.168.16.103)> curl -OL https://gist.github.com/lefred/77ddbde301c72535381ae7af9f968322/raw/5e40b03333a3c148b78aa348fd2cd5b5dbb36e4d/addition_to_sys.sql
+    
+    (192.168.16.103) mysql -u root -p < addition_to_sys.sql
+    (192.168.16.103) mysql -u root -p
+    (192.168.16.103) mysql> CREATE USER 'monitor'@'%' IDENTIFIED BY 'monitorpassword';
+    (192.168.16.103) mysql> GRANT SELECT on sys.* to 'monitor'@'%';
+    (192.168.16.103) mysql> FLUSH PRIVILEGES;
+  ```
+  4. Tambahkan akun monitoring yang baru dibuat pada step 3 ke ProxySQL (run command pada server yang host ProxySQL)
+  ```
+  mysql -u admin -p -h 127.0.0.1 -P 6032 --prompt='ProxySQLAdmin> '
+  ```
+  ```
+  ProxySQLAdmin> UPDATE global_variables SET variable_value='monitor' WHERE variable_name='mysql-monitor_username';
+  ProxySQLAdmin> UPDATE global_variables SET variable_value='monitorpassword' WHERE variable_name='mysql-monitor_password';
+  ProxySQLAdmin> LOAD MYSQL VARIABLES TO RUNTIME;
+  ProxySQLAdmin> SAVE MYSQL VARIABLES TO DISK;
+  ```
+  5. Tambahkan MySQL member ke ProxySQL Server Pool
+  Agar ProxySQL mengetahui MySQL member kita, maka MysSQL member harus dimasukkan ke dalam host group. Setiap host group teridentifikasi menggunakan angka. Host group memiliki 4 logical state:
+     - **writers**: query yang mengubah data.
+     - **backup writers**: query yang mengubah data, tapi hanya berjalan ketika primari writers bermasalah.
+     - **readers**: query yang membaca data, tidak ada operasi mengubah.
+     - **offline**: node yang bermasalah, ada network problem.
+     
+  Kita akan menggunakan identifier host group `1` untuk **offline**, `2` untuk **writer**, 3 untuk **reader**, dan `4` untuk *backup writer*.
+  ```
+  ProxySQLAdmin> INSERT INTO mysql_group_replication_hostgroups (writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind) VALUES (2, 4, 3, 1, 1, 3, 1, 100);
+  ```
+  ```
+  ProxySQLAdmin> INSERT INTO mysql_servers(hostgroup_id, hostname, port) VALUES (2, '192.168.16.103', 3306);
+  ProxySQLAdmin> INSERT INTO mysql_servers(hostgroup_id, hostname, port) VALUES (2, '192.168.16.104', 3306);
+  ProxySQLAdmin> INSERT INTO mysql_servers(hostgroup_id, hostname, port) VALUES (2, '192.168.16.105', 3306);
+  ```
+  ```
+  ProxySQLAdmin> LOAD MYSQL SERVERS TO RUNTIME;
+  ProxySQLAdmin> SAVE MYSQL SERVERS TO DISK;
+  ```
+  Cek MySQL member yang terdapat dalam hostgroup:
+  ```
+  ProxySQLAdmin> SELECT hostgroup_id, hostname, status FROM runtime_mysql_servers;
+  ```
+  4. Bikin MySQL member user yang akan digunakan oleh ProxySQL (dilakukan di salah 1 member)
+  ```
+  (192.168.16.103) mysql -u root -p
+  ```
+  ```
+  (192.168.16.103) mysql> CREATE USER 'bloguser'@'%' IDENTIFIED BY 'password';
+  (192.168.16.103) mysql> CREATE DATABASE blog;
+  (192.168.16.103) mysql> GRANT ALL PRIVILEGES on blog.* to 'bloguser'@'%';
+  (192.168.16.103) mysql> FLUSH PRIVILEGES;
+  ```
+  5. Tambahkan MySQL user pada step 4 ke ProxySQL (command dilakukan di ProxySQL server)
+  ```
+  mysql -u admin -p -h 127.0.0.1 -P 6032 --prompt='ProxySQLAdmin> '
+  ```
+  ```
+  ProxySQLAdmin> INSERT INTO mysql_users(username, password, default_hostgroup) VALUES ('bloguser', 'password', 2);
+  ProxySQLAdmin> LOAD MYSQL USERS TO RUNTIME;
+  ProxySQLAdmin> SAVE MYSQL USERS TO DISK;
+  ```
+
+c. Proses instalasi webserver
+  1. Install Nginx, .NET Core SDK & Runtime, NodeJS.
+  ```
+  sudo apt install nginx -y
+  sudo ufw allow 'Nginx HTTP'
+
+  wget -q https://packages.microsoft.com/config/ubuntu/16.04/packages-microsoft-prod.deb -O packages-microsoft-prod.deb
+  sudo dpkg -i packages-microsoft-prod.deb
+
+  sudo apt-get update -y
+  sudo apt-get install apt-transport-https -y
+  sudo apt-get update -y
+  sudo apt-get install dotnet-sdk-2.2 -y
+
+
+  wget -q https://packages.microsoft.com/config/ubuntu/16.04/packages-microsoft-prod.deb -O packages-microsoft-prod.deb
+  sudo dpkg -i packages-microsoft-prod.deb
+
+  sudo apt-get update -y
+  sudo apt-get install apt-transport-https -y
+  sudo apt-get update -y
+  sudo apt-get install aspnetcore-runtime-2.2 -y
+
+  curl -sL https://deb.nodesource.com/setup_8.x | sudo -E bash -
+  sudo apt-get install nodejs -y
+  ```
+  2. Clone repo project
+  ```
+  mkdir /home/vagrant/projects
+  cd /home/vagrant/projects
+  git clone https://github.com/adisazhar123/dotnet-core-reactredux-blog.git
+  cd /home/vagrant/projects/dotnet-core-reactredux-blog/src/App/Spa
+  ```
+  3. Install depedencies yang dibutuhkan project
+  ```
+  dotnet restore /home/vagrant/projects/dotnet-core-reactredux-blog/src/App/Spa
+  npm install /home/vagrant/projects/dotnet-core-reactredux-blog/src/App/Spa/ClientApp
+  ```
+
+  4. Build project
+  ```
+  sudo rm -r /home/vagrant/projects/dotnet-core-reactredux-blog/src/App/Spa/wwwroot/Storage
+  sudo ln -s /home/vagrant/projects/dotnet-core-reactredux-blog/src/App/Spa/Storage /home/vagrant/projects/dotnet-core-reactredux-blog/src/App/Spa/wwwroot
+  dotnet publish --configuration Release
+  mkdir /home/vagrant/projects/dotnet-core-reactredux-blog/src/App/Spa/bin/Release/netcoreapp2.2/publish/Storage
+  mkdir /home/vagrant/projects/dotnet-core-reactredux-blog/src/App/Spa/bin/Release/netcoreapp2.2/publish/Storage/Uploads
+  sudo chown www-data:www-data -R /home/vagrant/projects/dotnet-core-reactredux-blog/src/App/Spa/bin/Release/netcoreapp2.2/publish/Storage/Uploads
+  ```
+
+  5. Bikin symlink yang mengarah ke hasil build project. Ini akan digunakan oleh `systemd` untuk run service.
+  ```
+  sudo mkdir /var/www/AdisBlog
+  sudo ln -s /home/vagrant/projects/dotnet-core-reactredux-blog/src/App/Spa/bin/Release/netcoreapp2.2/publish /var/www/AdisBlog  
+  ```
+
+  6. Bikin konfigurasi Nginx. Nginx akan listen ke port 80, dan meneruskan ke Kestrel port 5000.
+  ```
+  sudo cp /vagrant/adisblog /etc/nginx/sites-available
+  sudo ln -s /etc/nginx/sites-available/adisblog /etc/nginx/sites-enabled
+  sudo rm /etc/nginx/sites-enabled/default
+  ```
+  Isi file Nginx:
+  ```
+  server {
+      listen        80;
+      server_name   192.168.16.106;
+      location / {
+          proxy_pass         http://localhost:5000;
+          proxy_http_version 1.1;
+          proxy_set_header   Upgrade $http_upgrade;
+          proxy_set_header   Host $host;
+          proxy_cache_bypass $http_upgrade;
+          proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header   X-Forwarded-Proto $scheme;
+      }
+  }
+  ```
+  7. Bikin service `systemd`. Systemd akan mengeksekusi file `AdisBlog.dll` yang merupakan hasil dari build project. Untuk menjalankan service tersebut bisa menggunakan command `sudo service kestrel-adisblog start`.
+  ```
+  sudo cp /vagrant/kestrel-adisblog.service /etc/systemd/system
+  sudo systemctl enable kestrel-adisblog.service
+  sudo systemctl start kestrel-adisblog.service
+  ```
+  Isi file `kestrel-adisblog.service`:
+  ```
+  [Unit]
+  Description=AdisBlog .NET Web API App & ReactJS running on Ubuntu
+
+  [Service]
+  WorkingDirectory=/var/www/AdisBlog/publish
+  ExecStart=/usr/bin/dotnet /var/www/AdisBlog/publish/AdisBlog.dll
+  Restart=always
+  # Restart service after 10 seconds if the dotnet service crashes:
+  RestartSec=10
+  KillSignal=SIGINT
+  SyslogIdentifier=dotnet-example
+  User=www-data
+  Environment=ASPNETCORE_ENVIRONMENT=Production
+  Environment=DOTNET_PRINT_TELEMETRY_MESSAGE=false
+
+  [Install]
+  WantedBy=multi-user.target
+
+  ```
+  Agar `kestrel-adisblog.service` dapat berjalan ketika server boot, jalankan command berikut:
+  ```
+  sudo systemctl enable kestrel-adisblog.service
+  ```
+  8. Akses `192.168.16.106` melalui web browser.
+
+  -----
+  File `bash` yang digunakan untuk provisioning adalah:
+  - Database:
+   `deployMySQL103.sh`, `deployMySQL104.sh`, `deployMySQL105.sh`
+  - Database Load Balancer:
+  `deployProxySQL.sh`
+  - Webserver:
+    `deployWebServer.sh`
+
+  Selain itu, terdapat file:
+  - konfigurasi nginx:
+  `adisblog`
+  - cluster MySQL member:
+  `cluster_bootstrap.sql`, `cluster_member.sql`
+  - ProxySQL member:
+  `create_proxysql_user.sql`
+  - ProxySQL init
+  `proxy.sql`
+  - kestrel http service
+  `kestrel-adisblog.service`
+  - mysql configurations
+  `my103.cnf`, `my104.cnf`, `my105.cnf`
+
+  Setiap command yang dijelaskan di atas terdapat di dalam file yang disebutkan, dan akan diprovision secara otomatis.

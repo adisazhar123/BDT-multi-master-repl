@@ -1,9 +1,0 @@
-#Members
-SET GLOBAL group_replication_bootstrap_group=ON;
-START GROUP_REPLICATION;
-SET GLOBAL group_replication_bootstrap_group=OFF;
-
-#proxy
-mysql -u blog -p -h 127.0.0.1 -P 6033 --prompt='ProxySQLClient> '
-#password is password
-
