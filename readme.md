@@ -225,6 +225,33 @@ b. Proses instalasi *database load balancer* ProxySQL
   ProxySQLAdmin> LOAD MYSQL USERS TO RUNTIME;
   ProxySQLAdmin> SAVE MYSQL USERS TO DISK;
   ```
+  
+  -----
+  File `bash` yang digunakan untuk provisioning adalah:
+  - Database:
+   `deployMySQL103.sh`, `deployMySQL104.sh`, `deployMySQL105.sh`
+  - Database Load Balancer:
+  `deployProxySQL.sh`
+  - Webserver:
+    `deployWebServer.sh`
+
+  Selain itu, terdapat file:
+  - konfigurasi nginx:
+  `adisblog`
+  - cluster MySQL member:
+  `cluster_bootstrap.sql`, `cluster_member.sql`
+  - ProxySQL member:
+  `create_proxysql_user.sql`
+  - ProxySQL init
+  `proxy.sql`
+  - kestrel http service
+  `kestrel-adisblog.service`
+  - mysql configurations
+  `my103.cnf`, `my104.cnf`, `my105.cnf`
+
+  Setiap command yang dijelaskan di atas terdapat di dalam file yang disebutkan, dan akan diprovision secara otomatis.
+
+  -----
 
 c. Proses instalasi webserver
   1. Install Nginx, .NET Core SDK & Runtime, NodeJS.
@@ -303,7 +330,7 @@ c. Proses instalasi webserver
       }
   }
   ```
-  7. Bikin service `systemd`. Systemd akan mengeksekusi file `AdisBlog.dll` yang merupakan hasil dari build project. Untuk menjalankan service tersebut bisa menggunakan command `sudo service kestrel-adisblog start`.
+  7. Bikin service `systemd`. Systemd akan mengeksekusi file `AdisBlog.dll` yang merupakan hasil dari build project menggunakan `/usr/bin/dotnet`. Hasil eksekusi command `/usr/bin/dotnet AdisBlog.dll` akan menyalakan server Kestrel. Untuk menjalankan service tersebut bisa menggunakan command `sudo service kestrel-adisblog start`.
   ```
   sudo cp /vagrant/kestrel-adisblog.service /etc/systemd/system
   sudo systemctl enable kestrel-adisblog.service
@@ -335,28 +362,44 @@ c. Proses instalasi webserver
   sudo systemctl enable kestrel-adisblog.service
   ```
   8. Akses `192.168.16.106` melalui web browser.
+  ---
 
-  -----
-  File `bash` yang digunakan untuk provisioning adalah:
-  - Database:
-   `deployMySQL103.sh`, `deployMySQL104.sh`, `deployMySQL105.sh`
-  - Database Load Balancer:
-  `deployProxySQL.sh`
-  - Webserver:
-    `deployWebServer.sh`
+**Soal 2**: Penggunaan basis data terdistribusi dalam aplikasi
+Aplikasi web yang digunakan adalah blog *simple* dikembangkan menggunakan framework ASP Net Core. Aplikasi web ini memiliki fitur: Login, Logout, Register, Bikin Post, Comment Post, Like Post dan Follow User.
 
-  Selain itu, terdapat file:
-  - konfigurasi nginx:
-  `adisblog`
-  - cluster MySQL member:
-  `cluster_bootstrap.sql`, `cluster_member.sql`
-  - ProxySQL member:
-  `create_proxysql_user.sql`
-  - ProxySQL init
-  `proxy.sql`
-  - kestrel http service
-  `kestrel-adisblog.service`
-  - mysql configurations
-  `my103.cnf`, `my104.cnf`, `my105.cnf`
+Untuk melakukan konfigurasi aplikasi agar bisa terhubung dengan infrastruktur MySQL, adalah dengan cara mengubah connection string DB. Connection string DB pada aplikasi web ini terdapat pada class `Startup.cs` dengan menambahkan statement ini di fungsi `ConfigureServices`:
+```
+services.AddDbContext<BlogsDbContext>(options => options.UseMySql("Server=192.168.16.107;Database=blog;User=bloguser;Password=password;" ));
+```
+Connection string berisi credentials yang terdapat pada ProxySQL. ProxySQL secara otomatis akan me route query yang masuk ke 3 MySQL member yang telah di-set sebelumnya.
 
-  Setiap command yang dijelaskan di atas terdapat di dalam file yang disebutkan, dan akan diprovision secara otomatis.
+Setelah mengisi connection string, kita harus melakukan database migration. Database migration akan membuat table-table yang dibutuhkan. Untuk melakukan database migration dapat run command 
+```
+/usr/bin/dotnet ef database update /home/vagrant/projects/dotnet-core-reactredux-blog/src/App/Spa
+```
+Web dapat diakses melalui `192.168.16.106`.
+
+------
+  **Soal 3**: Simulasi fail-over
+
+  1. Dengan kondisi semua server jadi member ONLINE dalam group.
+     - Create Post
+     ![CreatePost 1](media/create_post_01.png )*Create Post Baru*  
+     ![CreatePost 2](media/create_post_02.png ) *Hasil Create Post*
+     ![All Post](media/all_posts_03.png ) *All post. Post yang baru berada paling bawah*
+
+  2. Matikan salah satu MySQL server (192.168.16.103)
+     ![Group members](media/group_members_04.png ) *Member yang tergabung dalam group sebelum 192.168.16.103 dimatikan*
+     ![Group members 2](media/active_members_05.png ) *Member yang tergabung setelah 192.168.16.103 dimatikan*
+
+      - Create Post dengan 2 member
+      ![CreatePost dengan 2 member](media/create_post_103_off_06.png ) *Hasil Create Post dengan 192.168.16.103 mati*
+      ![CreatePost dengan 2 member](media/create_post_103_off_07.png ) *Hasil Create Post dengan 192.168.16.103 mati*
+      ![All Posts dengan 2 member](media/all_posts_103_off_08.png ) *All Posts dengan 192.168.16.103 mati*
+
+  3. Menyalakan 192.168.16.103
+      ![Cek data 192.168.16.103 sebelum join group](media/havent_join_group_09.png ) *Cek data pada 192.168.16.103 sebelum join group*      
+       ![Cek data pada 192.168.16.103 setelah join group](media/after_join_group_replication.png ) *Cek data pada 192.168.16.103 setelah join group*
+
+  Simulasi fail-over menunjukkan ketika salah satu member keluar dari group atau mati, maka secara otomatis ProxySQL akan me route ke member yang masih active. ProxySQL dapat mengetahui kondisi MySQL server melalui monitoring yang sudah diregistrasi sebelumnya. 
+  Server yang sebelumnya mati, lalu join group akan mendapatkan data yang terbaru. Simulasi fail-over berhasil dilakukan.
