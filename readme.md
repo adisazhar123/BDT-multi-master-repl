@@ -48,21 +48,29 @@ a. Proses instalasi *database server*
 Database yang digunakan adalah MySQL dengan plugin MySQL Group replication. Berikut adalah step yang harus dilakukan:
 
   1. Download MySQL Server dan MySQL Client binary (dilakukan di ketiga DB server)
-      `curl -OL https://dev.mysql.com/get/Downloads MySQL-5.7mysql-common_5.7.23-1ubuntu16.04_amd64.deb`
-      `curl -OL https://dev.mysql.com/get/Downloads/MySQL-5.7/mysql-community-client_5.7.23-1ubuntu16.04_amd64.deb`
-      `curl -OL https://dev.mysql.com/get/Downloads/MySQL-5.7/mysql-client_5.7.23-1ubuntu16.04_amd64.deb`
-      `curl -OL https://dev.mysql.com/get/Downloads/MySQL-5.7/mysql-community-server_5.7.23-1ubuntu16.04_amd64.deb`
+      ```
+      curl -OL https://dev.mysql.com/get/Downloads MySQL-5.7mysql-common_5.7.23-1ubuntu16.04_amd64.deb
+      curl -OL https://dev.mysql.com/get/Downloads/MySQL-5.7/mysql-community-client_5.7.23-1ubuntu16.04_amd64.deb
+      curl -OL https://dev.mysql.com/get/Downloads/MySQL-5.7/mysql-client_5.7.23-1ubuntu16.04_amd64.deb
+      curl -OL https://dev.mysql.com/get/Downloads/MySQL-5.7/mysql-community-server_5.7.23-1ubuntu16.04_amd64.deb
+      ```
   2. Set default MySQL password agar tidak perlu input manual saat instalasi (dilakukan di ketiga DB server)
-      `sudo debconf-set-selections <<< 'mysql-community-server mysql-community-server/root-pass password admin'`
-      `sudo debconf-set-selections <<< 'mysql-community-server mysql-community-server/re-root-pass password admin'`
+      ```
+      sudo debconf-set-selections <<< 'mysql-community-server mysql-community-server/root-pass password admin'
+      sudo debconf-set-selections <<< 'mysql-community-server mysql-community-server/re-root-pass password admin'
+      ```
   3. Run .deb file yang telah didownload pada step 1 (dilakukan di ketiga DB server):
-      `sudo dpkg -i mysql-common_5.7.23-1ubuntu16.04_amd64.deb`
-      `sudo dpkg -i mysql-community-client_5.7.23-1ubuntu16.04_amd64.deb`
-      `sudo dpkg -i mysql-client_5.7.23-1ubuntu16.04_amd64.deb`
-      `sudo dpkg -i mysql-community-server_5.7.23-1ubuntu16.04_amd64.deb`
+      ```
+      sudo dpkg -i mysql-common_5.7.23-1ubuntu16.04_amd64.deb
+      sudo dpkg -i mysql-community-client_5.7.23-1ubuntu16.04_amd64.deb
+      sudo dpkg -i mysql-client_5.7.23-1ubuntu16.04_amd64.deb
+      sudo dpkg -i mysql-community-server_5.7.23-1ubuntu16.04_amd64.deb
+      ```
   4. MySQL berkomunikasi menggunakan port 33061 dan 3306, maka kita harus membuka port tersebut (dilakukan di ketiga DB server):
-      `sudo ufw allow 33061`
-      `sudo ufw allow 3306`
+      ```
+      sudo ufw allow 33061
+      sudo ufw allow 3306
+      ```
   5. Setiap MySQL server membutuhkan file konfigurasi `my.cnf`. Agar group replication dapat berjalan, kita harus set beberapa variable. 
   Database server yang akan kita buat memiliki IP sebagai berikut: `192.168.16.103`, `192.168.16.104`, dan `192.168.16.105`. Ketiga nya akan berada dalam 1 group, dan berperan sebagai `write` dan `read`. Setiap group memiliki *identifier* yang unik, dan harus kita definisikan sendiri. Linux memiliki command `uuidgen` untuk membuat UUID. Output dari `uuidgen` akan digunakan untuk set variable `loose-group_replication_group_name="8f22f846-9922-4139-b2b7-097d185a93cb"`. Setelah set `loose-group_replication_group_name` kita harus menambahkan IP DB server ke dalam whitelist untuk menentukan IP mana saja yang boleh *connect* ke group. Parameter tersebut adalah `loose-group_replication_ip_whitelist="192.168.16.103, 192.168.16.104, 192.168.16.105"`. Ketiga member tersebut akan memberi data jika ada member yang baru join, maka agar pemberian data dapat terjadi, parameter `loose-group_replication_group_seeds` terisi menjadi `loose-group_replication_group_seeds = "192.168.16.103:33061, 192.168.16.104:33061, 192.168.16.105:33061"`.
   Agar *multi primary mode* nyala, kita harus mematikan *single primary mode* dengan cara ```loose-group_replication_single_primary_mode = OFF```.
@@ -403,3 +411,28 @@ Web dapat diakses melalui `192.168.16.106`.
 
   Simulasi fail-over menunjukkan ketika salah satu member keluar dari group atau mati, maka secara otomatis ProxySQL akan me route ke member yang masih active. ProxySQL dapat mengetahui kondisi MySQL server melalui monitoring yang sudah diregistrasi sebelumnya. 
   Server yang sebelumnya mati, lalu join group akan mendapatkan data yang terbaru. Simulasi fail-over berhasil dilakukan.
+
+  -----
+  File `bash` yang digunakan untuk provisioning adalah:
+  - Database:
+   `deployMySQL103.sh`, `deployMySQL104.sh`, `deployMySQL105.sh`
+  - Database Load Balancer:
+  `deployProxySQL.sh`
+  - Webserver:
+    `deployWebServer.sh`
+
+  Selain itu, terdapat file:
+  - konfigurasi nginx:
+  `adisblog`
+  - cluster MySQL member:
+  `cluster_bootstrap.sql`, `cluster_member.sql`
+  - ProxySQL member:
+  `create_proxysql_user.sql`
+  - ProxySQL init
+  `proxy.sql`
+  - kestrel http service
+  `kestrel-adisblog.service`
+  - mysql configurations
+  `my103.cnf`, `my104.cnf`, `my105.cnf`
+
+  Setiap command yang dijelaskan di atas terdapat di dalam file yang disebutkan, dan akan diprovision secara otomatis.
